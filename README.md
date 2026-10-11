@@ -54,3 +54,7 @@ Glovebox is an open-source fan project, not affiliated with or endorsed by Valve
 game. Glovebox never hosts, shares or sells game files, and never charges money. [Legal](docs/LEGAL.md)
 
 **Valve:** we'd love to do this properly with you.
+
+## Experimental native macOS / PSVR2 host
+
+The separate [experimental macOS/PSVR2 path](klepton/MACOS-PSVR2.md) builds Klepton as a native Apple Silicon Mac host and presents it through an already prepared Metal OpenXR runtime. The supported product path remains visionOS; this headset preview has known renderer and gameplay blockers.

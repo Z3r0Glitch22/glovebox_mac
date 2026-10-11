@@ -1278,11 +1278,21 @@ build/fz/kl_fossilize.o: runtime/linux/kl_fossilize.cpp runtime/gfx/kl_vk_pipe_h
 	@mkdir -p build/fz
 	$(FZ_CXX) -c -o $@ $<
 
-build/m_alyx: mains/m_alyx.c $(RUNTIME) $(RUNTIME_LINUX) $(RUNTIME_HDRS) build/kl_steamnet.o $(KLVR_OBJ) $(FZ_OBJ)
+# Set these when building the native macOS PSVR2 host. The Xcode/SDK checkout,
+# generated OpenXR headers and Metal-capable loader are user-supplied build tools.
+ALYX_XR_SDK ?=
+ALYX_XR_GENERATED_INCLUDE ?=
+ALYX_XR_LIB ?=
+build/alyx_psvr2.o: mains/alyx_psvr2.mm $(RUNTIME_HDRS)
+	@test -n "$(ALYX_XR_SDK)" || { echo "Set ALYX_XR_SDK to the OpenXR-SDK-Source checkout" >&2; exit 2; }
+	clang++ $(CFLAGS) -std=c++17 -fobjc-arc -Wno-missing-field-initializers -I$(ALYX_XR_SDK)/include $(if $(ALYX_XR_GENERATED_INCLUDE),-I$(ALYX_XR_GENERATED_INCLUDE),) -c $< -o $@
+
+build/m_alyx: build/alyx_psvr2.o mains/m_alyx.c mains/alyx_mac_view.m runtime/gfx/kl_view_mtl.m $(RUNTIME) $(RUNTIME_LINUX) $(RUNTIME_HDRS) build/kl_steamnet.o $(KLVR_OBJ) $(FZ_OBJ)
+	@test -n "$(ALYX_XR_LIB)" || { echo "Set ALYX_XR_LIB to a directory containing libopenxr_loader.dylib" >&2; exit 2; }
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(KLVR_DEF) -fobjc-arc -o $@ mains/m_alyx.c $(RUNTIME) $(filter-out %.cpp,$(RUNTIME_LINUX)) \
+	$(CC) $(CFLAGS) $(KLVR_DEF) -fobjc-arc -o $@ build/alyx_psvr2.o mains/m_alyx.c mains/alyx_mac_view.m runtime/gfx/kl_view_mtl.m $(RUNTIME) $(filter-out %.cpp,$(RUNTIME_LINUX)) \
 	  build/kl_steamnet.o $(KLVR_OBJ) $(FZ_OBJ) \
-	  $(LDLIBS) -framework Metal -framework QuartzCore -framework Foundation -framework CoreAudio -liconv -lc++ -Wl,-force_load,../src/LuaJIT/src/libluajit.a
+	  $(LDLIBS) -framework Metal -framework QuartzCore -framework Foundation -framework AppKit -framework CoreAudio -L$(ALYX_XR_LIB) -lopenxr_loader -Wl,-rpath,@executable_path -Wl,-rpath,$(ALYX_XR_LIB) -liconv -lc++ -Wl,-force_load,../src/LuaJIT/src/libluajit.a
 
 # ---- Alyx add-on for the visionOS app: build/<plat>/libklalyx.a ----------------
 # What m_alyx links beyond the shipped runtime — the glibc personality, the

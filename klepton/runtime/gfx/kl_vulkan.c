@@ -4301,12 +4301,59 @@ static VkResult VKAPI_CALL klvk_CreateRenderPass2_body(VkDevice dev,
 // KL_TRACE: dynamic-rendering census (vkCmdBeginRendering). If the guest renders
 // its eye/menu with VK_KHR_dynamic_rendering there is NO framebuffer and NO
 // render pass object, so this is the only place those renders are visible.
+// Optional Mac lowering of dynamic-rendering suspension into independent passes.
+// MoltenVK 1.4.2 leaves a resolve texture bound while selecting Store for a
+// suspended segment, which macOS 27 Metal validation rejects. Preserve the
+// multisample source in intermediate segments; load it when continuing, and
+// resolve only in the final segment. Guest descriptors are never modified.
+static void klvk_split_attachment(VkRenderingAttachmentInfo *a, int resume, int suspend) {
+    if (!a->imageView) return;
+    if (resume) a->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    if (suspend) {
+        a->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        a->resolveMode = VK_RESOLVE_MODE_NONE;
+        a->resolveImageView = VK_NULL_HANDLE;
+    }
+}
 static void VKAPI_CALL klvk_CmdBeginRendering(VkCommandBuffer cb,
         const VkRenderingInfo *ri) {
     static PFN_vkCmdBeginRendering real;
     if (!real) {
         real = (PFN_vkCmdBeginRendering)mvk_sym("vkCmdBeginRendering");
         if (!real) real = (PFN_vkCmdBeginRendering)mvk_sym("vkCmdBeginRenderingKHR");
+    }
+    VkRenderingInfo split;
+    VkRenderingAttachmentInfo *colors = NULL, depth, stencil;
+    if (ri && kl_env_on("KL_VK_SPLIT_DYNAMIC_RENDERING", 0) &&
+        (ri->flags & (VK_RENDERING_RESUMING_BIT | VK_RENDERING_SUSPENDING_BIT))) {
+        int resume = !!(ri->flags & VK_RENDERING_RESUMING_BIT);
+        int suspend = !!(ri->flags & VK_RENDERING_SUSPENDING_BIT);
+        if (ri->colorAttachmentCount) {
+            colors = malloc(ri->colorAttachmentCount * sizeof *colors);
+            if (!colors) { fprintf(stderr, "[split-rp] allocation failed\n"); abort(); }
+            memcpy(colors, ri->pColorAttachments, ri->colorAttachmentCount * sizeof *colors);
+            for (uint32_t i = 0; i < ri->colorAttachmentCount; i++)
+                klvk_split_attachment(&colors[i], resume, suspend);
+        }
+        split = *ri;
+        split.flags &= ~(VK_RENDERING_RESUMING_BIT | VK_RENDERING_SUSPENDING_BIT);
+        split.pColorAttachments = colors;
+        if (ri->pDepthAttachment) {
+            depth = *ri->pDepthAttachment;
+            klvk_split_attachment(&depth, resume, suspend);
+            split.pDepthAttachment = &depth;
+        }
+        if (ri->pStencilAttachment) {
+            stencil = *ri->pStencilAttachment;
+            klvk_split_attachment(&stencil, resume, suspend);
+            split.pStencilAttachment = &stencil;
+        }
+        static unsigned notes;
+        if (__atomic_fetch_add(&notes, 1, __ATOMIC_RELAXED) < 24)
+            fprintf(stderr, "[split-rp] %ux%u view=%#x resume=%d suspend=%d, resolve=%s\n",
+                    ri->renderArea.extent.width, ri->renderArea.extent.height,
+                    ri->viewMask, resume, suspend, suspend ? "deferred" : "final");
+        ri = &split;
     }
     // KL_VK_RP_TRACE=<frame>: every vkCmdBeginRendering of that guest frame (kl_gpu_time's count), with the
     // command buffer it is recorded in, suspend/resume flags, and each attachment's load/store/resolve ops.
@@ -4344,6 +4391,7 @@ static void VKAPI_CALL klvk_CmdBeginRendering(VkCommandBuffer cb,
         }
     }
     if (real) real(cb, ri);
+    free(colors);
 }
 // KL_TRACE: catch a temp-RT allocation that FAILS at bind time — the step Unity
 // does through MoltenVK directly, invisible until now. A failure here is what

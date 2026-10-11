@@ -8,9 +8,9 @@
 //
 // Built with the OpenVR shim (KL_OPENVR_SHIM, see the Makefile), the game's
 // libopenvr_api.so is never loaded: its VR_* entry points bind to the shim,
-// so a run without -novr gets a headset. On the Mac there is none, and the
-// shim's host mode stands in (fixed head, still hands, the game's own window
-// as the picture); see shim/openvr/README.md in the project repo.
+// so a run without -novr gets a headset. Without the native macOS frontend,
+// the shim's host mode stands in (fixed head, still hands, the game's own
+// window as the picture); see shim/openvr/README.md in the project repo.
 #include <dirent.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
@@ -276,12 +276,21 @@ static int run_as_app(const char *sysroot) {
     return run_launcher(game, sysroot, n, gargv);
 }
 
+extern int kl_alyx_mac_view(const char *, const char *, int, char **,
+    int (*)(const char *, const char *, int, char **));
+
+extern int kl_alyx_psvr2_pose_test(void);
 int main(int argc, char **argv) {
     setvbuf(stderr, NULL, _IONBF, 0);
+    if (argc == 2 && !strcmp(argv[1], "--psvr2-pose-test")) return kl_alyx_psvr2_pose_test();
     if (argc == 3 && !strcmp(argv[2], "--app")) return run_as_app(argv[1]);
     if (argc < 3) { fprintf(stderr, "usage: m_alyx <game dir> <sysroot> [--gap | --run [game args...]]\n"
                                     "       m_alyx <sysroot> --app   (KL_APP_DOCS, KL_APP_BUNDLE)\n"); return 2; }
-    if (argc > 3 && !strcmp(argv[3], "--run")) return run_launcher(argv[1], argv[2], argc - 4, argv + 4);
+    if (argc > 3 && !strcmp(argv[3], "--run")) {
+        if (getenv("KL_ALYX_MAC_VIEW"))
+            return kl_alyx_mac_view(argv[1], argv[2], argc - 4, argv + 4, run_launcher);
+        return run_launcher(argv[1], argv[2], argc - 4, argv + 4);
+    }
     int gap = argc > 3 && !strcmp(argv[3], "--gap");
     static char d0[1024], d1[1024];
     snprintf(d0, sizeof d0, "%s/bin/linuxsteamrtarm64", argv[1]);
